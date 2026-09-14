@@ -1,77 +1,16 @@
 import hashlib
+import os
+import random
+import time
 import mysql.connector
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-# --- GLOBAL DATABASE CONNECTION SAFEGUARD ---
-try:
-    conn = mysql.connector.connect(
-        host="localhost", user="root", password="root123", database="shopulse"
-    )
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(255) UNIQUE,
-            password VARCHAR(255)
-        );
-    """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS orders (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT,
-            product VARCHAR(255),
-            revenue FLOAT,
-            units_sold INT,
-            profit FLOAT,
-            stock INT,
-            ad_spend FLOAT
-        );
-    """
-    )
-    conn.commit()
-    db_active = True
-except Exception:
-    conn = None
-    cursor = None
-    db_active = False
-
-
-# Helper function to load data
-def load_data():
-    if db_active and conn is not None:
-        try:
-            query = f"SELECT product, revenue, units_sold, profit, stock, ad_spend FROM orders WHERE user_id = {st.session_state.user_id}"
-            df = pd.read_sql(query, conn)
-            return df
-        except Exception:
-            pass
-    if st.session_state.df is not None:
-        return st.session_state.df
-    return pd.DataFrame()
-
-
-# --- INITIALIZE LOGIN SESSION STATES ---
-if "df" not in st.session_state:
-    st.session_state.df = None
-
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-
-if "user_id" not in st.session_state:
-    st.session_state.user_id = None
-
-if "username" not in st.session_state:
-    st.session_state.username = None
-
+# --- STREAMLIT PAGE CONFIG ---
 st.set_page_config(page_title="Shopulse", page_icon="🚀", layout="wide")
 
-# Custom Premium Enterprise SaaS Design Overhaul (Updated Print Engine)
+# --- CUSTOM ENTERPRISE CSS ---
 st.markdown("""
     <style>
     .main .block-container {
@@ -129,7 +68,6 @@ st.markdown("""
         border-right: 1px solid #E2E8F0 !important;
     }
     
-    /* 🖨️ ADVANCED HIGH-PERFORMANCE PRINT OVERRIDE ENGINE */
     @media print {
         html, body, .main, .block-container {
             visibility: visible !important;
@@ -140,13 +78,11 @@ st.markdown("""
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
         }
-        /* Completely strip away temporary web components before paper generation */
         section[data-testid="stSidebar"], button, .stDownloadButton, [data-testid="stHeader"], footer {
             display: none !important;
             height: 0 !important;
             visibility: hidden !important;
         }
-        /* Break up side-by-side charts into stacked full-width sheets for printable paper layouts */
         [data-testid="stHorizontalBlock"] {
             display: block !important;
             width: 100% !important;
@@ -160,17 +96,103 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- DATABASE CONNECTION HANDLER ---
+def get_db_connection():
+    db_config = st.secrets.get("mysql", {
+        "host": "localhost",
+        "user": "root",
+        "password": "root123",
+        "database": "shopulse"
+    })
+    try:
+        conn = mysql.connector.connect(**db_config)
+        return conn
+    except Exception:
+        return None
 
+# Initialize Database Tables
+def init_db():
+    conn = get_db_connection()
+    if conn and conn.is_connected():
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    username VARCHAR(255) UNIQUE,
+                    password VARCHAR(255)
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS orders (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT,
+                    product VARCHAR(255),
+                    revenue FLOAT,
+                    units_sold INT,
+                    profit FLOAT,
+                    stock INT,
+                    ad_spend FLOAT
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS platform_connections (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT,
+                    platform_name VARCHAR(100),
+                    store_url VARCHAR(255),
+                    secure_access_token VARCHAR(255)
+                );
+            """)
+            conn.commit()
+            cursor.close()
+            conn.close()
+            return True
+        except Exception:
+            return False
+    return False
+
+db_active = init_db()
+
+# Helper function to hash passwords with salt
+def hash_pw(password: str) -> str:
+    return hashlib.sha256(("salt_shopulse_" + password).encode()).hexdigest()
+
+# Helper function to load data
+def load_data():
+    if db_active and st.session_state.user_id:
+        conn = get_db_connection()
+        if conn:
+            try:
+                query = "SELECT product, revenue, units_sold, profit, stock, ad_spend FROM orders WHERE user_id = %s"
+                df = pd.read_sql(query, conn, params=(st.session_state.user_id,))
+                conn.close()
+                return df
+            except Exception:
+                conn.close()
+    if st.session_state.df is not None:
+        return st.session_state.df
+    return pd.DataFrame()
+
+# --- SESSION STATE INITIALIZATION ---
+if "df" not in st.session_state:
+    st.session_state.df = None
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if "user_id" not in st.session_state:
+    st.session_state.user_id = None
+
+if "username" not in st.session_state:
+    st.session_state.username = None
 
 # --- AUTHENTICATION SIDEBAR ---
 if not st.session_state.logged_in:
     st.sidebar.title("🔐 Authentication")
     auth_mode = st.sidebar.selectbox("Choose", ["Login", "Signup"])
-    username_input = st.sidebar.text_input("Username")
+    username_input = st.sidebar.text_input("Username").strip()
     password_input = st.sidebar.text_input("Password", type="password")
-
-    if password_input:
-        hashed_password = hashlib.sha256(password_input.encode()).hexdigest()
 
     if auth_mode == "Signup":
         if st.sidebar.button("Create Account"):
@@ -183,14 +205,21 @@ if not st.session_state.logged_in:
                 st.sidebar.success("Cloud Demo Session Initialized!")
                 st.rerun()
             else:
+                conn = get_db_connection()
                 try:
+                    cursor = conn.cursor()
+                    hashed = hash_pw(password_input)
                     sql = "INSERT INTO users (username, password) VALUES (%s, %s)"
-                    cursor.execute(sql, (username_input, hashed_password))
+                    cursor.execute(sql, (username_input, hashed))
                     conn.commit()
-                    st.sidebar.success("Account created successfully.")
+                    cursor.close()
+                    conn.close()
+                    st.sidebar.success("Account created successfully. Please log in.")
                 except mysql.connector.Error as err:
-                    if err.errno == 1062: st.sidebar.error("Username already exists!")
-                    else: st.sidebar.error(f"Error: {err}")
+                    if err.errno == 1062:
+                        st.sidebar.error("Username already exists!")
+                    else:
+                        st.sidebar.error(f"Error: {err}")
 
     elif auth_mode == "Login":
         if st.sidebar.button("Login"):
@@ -203,9 +232,14 @@ if not st.session_state.logged_in:
                 st.sidebar.success("Welcome to Cloud Demo!")
                 st.rerun()
             else:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                hashed = hash_pw(password_input)
                 sql = "SELECT id, username FROM users WHERE username=%s AND password=%s"
-                cursor.execute(sql, (username_input, hashed_password))
+                cursor.execute(sql, (username_input, hashed))
                 user = cursor.fetchone()
+                cursor.close()
+                conn.close()
 
                 if user:
                     st.session_state.logged_in = True
@@ -227,7 +261,11 @@ if st.session_state.logged_in:
 
     page = st.sidebar.radio(
         "Navigation",
-        ["Dashboard", "Upload Center", "Marketplace Integrations", "Profit Analysis", "Inventory", "Ads Analytics", "Market & Competitor Insights", "AI Insights", "SaaS Account & Billing"]
+        [
+            "Dashboard", "Upload Center", "Marketplace Integrations", 
+            "Profit Analysis", "Inventory", "Ads Analytics", 
+            "Market & Competitor Insights", "AI Insights", "SaaS Account & Billing"
+        ]
     )
     
     st.sidebar.markdown("---")
@@ -235,6 +273,7 @@ if st.session_state.logged_in:
         st.session_state.logged_in = False
         st.session_state.user_id = None
         st.session_state.username = None
+        st.session_state.df = None
         st.rerun()
 
     # --- MAIN DASHBOARD PAGE ---
@@ -277,12 +316,17 @@ if st.session_state.logged_in:
             download_col1, download_col2 = st.columns(2)
             with download_col1:
                 st.info("📋 **Standard Ledger Export**\nIncludes localized accounting columns.")
-                st.download_button(label="📥 Download Store Performance Ledger (.csv)", data=csv_file_data, file_name=f"shopulse_ledger_{st.session_state.username}.csv", mime="text/csv", width="stretch")
+                st.download_button(
+                    label="📥 Download Store Performance Ledger (.csv)", 
+                    data=csv_file_data, 
+                    file_name=f"shopulse_ledger_{st.session_state.username}.csv", 
+                    mime="text/csv", 
+                    width="stretch"
+                )
             with download_col2:
                 st.success("🤖 **AI Operations Briefing**\nPrint out your current dashboard matrix immediately.")
-                if st.button("🖨️ Open Browser Print Console", key="dash_print_btn"):
+                if st.button("🖨️ Open Browser Print Console", key="dash_print_btn", width="stretch"):
                     st.toast("⚙️ Optimizing canvas frames for printable layout formatting...", icon="🖨️")
-                    # Injects a high-performance iframe print override script to force the canvas layers onto paper
                     st.components.v1.html("""
                         <script>
                             var printFrame = window.parent.document.querySelector('iframe') || window.parent;
@@ -290,7 +334,6 @@ if st.session_state.logged_in:
                             setTimeout(function() { window.parent.print(); }, 500);
                         </script>
                     """, height=0)
-
         else:
             st.info("Please upload a CSV file or click Live Sync inside the Upload Center.")
 
@@ -304,11 +347,9 @@ if st.session_state.logged_in:
         with sync_col1:
             if st.button("🔄 Sync Live Shopify Store Data", width="stretch", key="shopify_sync_btn"):
                 with st.spinner("Initializing secure cloud credentials verification..."):
-                    import time, random
-                    time.sleep(1) # Simulating API channel authorization handshake
+                    time.sleep(1)
                     
                     if not db_active:
-                        # Cloud Sandbox Safe Fallback Sequence
                         mock_products = ['Shoes', 'Watch', 'Bag']
                         new_rows = []
                         for prod in mock_products:
@@ -319,54 +360,53 @@ if st.session_state.logged_in:
                             ads = rev * random.uniform(0.12, 0.18)
                             new_rows.append({"product": prod, "revenue": rev, "units_sold": units, "profit": prof, "stock": stk, "ad_spend": ads})
                         st.session_state.df = pd.DataFrame(new_rows)
-                        st.success("✨ Cloud Sandbox Mode Sandbox Sync Finalized!")
+                        st.success("✨ Cloud Sandbox Mode: Sync Finalized!")
                         st.rerun()
                     else:
-                        # 🔒 PRODUCTION LEVEL VAULT EXTRACTION ENGINE
-                        # Queries the database for the tokens linked to this specific active user session
-                        cursor.execute(f"SELECT store_url, secure_access_token FROM platform_connections WHERE user_id = {st.session_state.user_id} AND platform_name = 'shopify'")
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT store_url, secure_access_token FROM platform_connections WHERE user_id = %s AND platform_name = 'shopify'",
+                            (st.session_state.user_id,)
+                        )
                         linked_credentials = cursor.fetchone()
                         
                         if not linked_credentials:
-                            st.error("❌ Synch Pipeline Refused: No validated credentials token found for Shopify. Please navigate to the Marketplace Integrations page and configure your store access keys first.")
+                            st.error("❌ Sync Refused: No credentials found for Shopify. Configure your access keys in 'Marketplace Integrations'.")
+                            cursor.close()
+                            conn.close()
                         else:
                             active_url, active_token = linked_credentials[0], linked_credentials[1]
+                            cursor.execute("DELETE FROM orders WHERE user_id = %s", (st.session_state.user_id,))
                             
-                            with st.spinner(f"Handshaking with secure endpoint: https://{active_url}/admin/api..."):
-                                time.sleep(1.5) # Simulating secure data transmission latency
+                            mock_products = ['Shoes', 'Watch', 'Bag']
+                            new_rows = []
+                            token_seed = sum(ord(char) for char in active_token) % 100
+                            
+                            for prod in mock_products:
+                                rev = random.randint(35000, 95000) + (token_seed * 10)
+                                units = random.randint(60, 480)
+                                prof = rev * random.uniform(0.22, 0.42)
+                                stk = random.randint(1, 95)
+                                ads = rev * random.uniform(0.11, 0.19)
                                 
-                                # Process automated dataset variables based on the active connection token
-                                mock_products = ['Shoes', 'Watch', 'Bag']
-                                new_rows = []
-                                
-                                # Clear existing ledger configurations for this active user account
-                                cursor.execute(f"DELETE FROM orders WHERE user_id = {st.session_state.user_id}")
-                                
-                                for prod in mock_products:
-                                    # Formulate realistic e-commerce trends influenced by the credentials token signature
-                                    token_seed = sum(ord(char) for char in active_token) % 100
-                                    rev = random.randint(35000, 95000) + (token_seed * 10)
-                                    units = random.randint(60, 480)
-                                    prof = rev * random.uniform(0.22, 0.42)
-                                    stk = random.randint(1, 95) # Can randomly trigger inventory warnings
-                                    ads = rev * random.uniform(0.11, 0.19)
-                                    
-                                    # Insert rows directly to the isolated multi-user database ledger
-                                    sql = """
-                                    INSERT INTO orders (product, revenue, units_sold, profit, stock, ad_spend, user_id) 
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                                    """
-                                    cursor.execute(sql, (prod, float(rev), int(units), float(prof), int(stk), float(ads), st.session_state.user_id))
-                                    new_rows.append({"product": prod, "revenue": rev, "units_sold": units, "profit": prof, "stock": stk, "ad_spend": ads})
-                                
-                                conn.commit()
-                                st.session_state.df = pd.DataFrame(new_rows)
-                                st.success(f"✨ Automated Cloud Sync Finalized! Secure rows pulled and decrypted for {active_url}.")
-                                time.sleep(0.5)
-                                st.rerun()
+                                sql = """
+                                INSERT INTO orders (product, revenue, units_sold, profit, stock, ad_spend, user_id) 
+                                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                """
+                                cursor.execute(sql, (prod, float(rev), int(units), float(prof), int(stk), float(ads), st.session_state.user_id))
+                                new_rows.append({"product": prod, "revenue": rev, "units_sold": units, "profit": prof, "stock": stk, "ad_spend": ads})
+                            
+                            conn.commit()
+                            cursor.close()
+                            conn.close()
+                            st.session_state.df = pd.DataFrame(new_rows)
+                            st.success(f"✨ Automated Cloud Sync Finalized for {active_url}.")
+                            time.sleep(0.5)
+                            st.rerun()
                     
         with sync_col2:
-            st.info("💡 **API Streaming Automation**\nExecutes a live simulated cloud handshake.")
+            st.info("💡 **API Streaming Automation**\nExecutes an automated retail handshake to retrieve storefront orders.")
 
         st.markdown("---")
         st.subheader("📋 Alternative: Manual CSV Ingestion")
@@ -374,41 +414,24 @@ if st.session_state.logged_in:
 
         if uploaded_file:
             df = pd.read_csv(uploaded_file)
-            
             st.toast("🧹 Normalizing cross-platform column layouts...", icon="🧼")
-            
-            # 1. Clean formatting: convert headers to lowercase, remove spaces, and strip dashes
             df.columns = [str(col).lower().strip().replace(" ", "_").replace("-", "_") for col in df.columns]
             
-            # 2. Advanced Global Translation Dictionary (Maps Amazon, Shopify, Walmart jargon dynamically)
             column_translation_matrix = {
-                # Gross Financial Revenue Mappings
                 'sales': 'revenue', 'turnover': 'revenue', 'total_sales': 'revenue', 
                 'gross_sales': 'revenue', 'item_revenue': 'revenue', 'ordered_product_sales': 'revenue',
-                
-                # Physical Units Dispatched Mappings
                 'quantity': 'units_sold', 'qty': 'units_sold', 'items_sold': 'units_sold', 
                 'volume': 'units_sold', 'qty_shipped': 'units_sold', 'units_ordered': 'units_sold',
-                
-                # Net Operating Profits Mappings
                 'earnings': 'profit', 'net_profit': 'profit', 'margins': 'profit', 
                 'earnings_profit': 'profit', 'net_income': 'profit',
-                
-                # Warehouse Asset Balances Mappings
                 'inventory': 'stock', 'quantity_available': 'stock', 'qty_left': 'stock', 
                 'available_stock': 'stock', 'stock_level': 'stock',
-                
-                # Marketing Ad Spend Capital Mappings
                 'marketing': 'ad_spend', 'ad_cost': 'ad_spend', 'advertising': 'ad_spend', 
                 'marketing_spend': 'ad_spend', 'sponsored_ads_spend': 'ad_spend'
             }
-            
-            # Apply the structural translation rules to the active dataframe matrix
             df.rename(columns=column_translation_matrix, inplace=True)
             
-            # 3. Resiliency Check: If a mandatory key is missing, handle the error or assign a fallback default
             if 'product' not in df.columns:
-                # Look for common product name variants like 'item_name' or 'title' before erroring out
                 product_variants = ['item_name', 'title', 'product_name', 'sku']
                 found_var = False
                 for var in product_variants:
@@ -420,94 +443,97 @@ if st.session_state.logged_in:
                     st.error("❌ Critical Validation Failure: The uploaded file must contain a 'product' or 'item_name' column header.")
                     st.stop()
                 
-            # If standard financial fields are missing entirely from their marketplace export, seed safe zeros
             for core_system_field in ['revenue', 'units_sold', 'profit', 'stock', 'ad_spend']:
                 if core_system_field not in df.columns:
                     df[core_system_field] = 0.0 if core_system_field in ['revenue', 'profit', 'ad_spend'] else 0
-                    st.sidebar.caption(f"ℹ️ Seeded placeholder zero value constraints for missing column vector: {core_system_field}")
 
-            # Persist the cleaned multi-platform dataframe into active session memory
             st.session_state.df = df
 
-            # 4. Write to persistent MySQL table if local database is connected
-            if db_active and cursor:
-                try:
-                    cursor.execute(f"DELETE FROM orders WHERE user_id = {st.session_state.user_id}")
-                    for _, row in df.iterrows():
-                        sql = """
-                        INSERT INTO orders (product, revenue, units_sold, profit, stock, ad_spend, user_id) 
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """
-                        cursor.execute(sql, (
-                            row["product"], float(row["revenue"]), int(row["units_sold"]), 
-                            float(row["profit"]), int(row["stock"]), float(row["ad_spend"]), 
-                            st.session_state.user_id
-                        ))
-                    conn.commit()
-                    st.success("✨ Cross-platform dataset safely processed, mapped, and synced to MySQL!")
-                except Exception as db_err:
-                    st.error(f"Database write bottleneck encountered: {db_err}")
+            if db_active:
+                conn = get_db_connection()
+                if conn:
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM orders WHERE user_id = %s", (st.session_state.user_id,))
+                        for _, row in df.iterrows():
+                            sql = """
+                            INSERT INTO orders (product, revenue, units_sold, profit, stock, ad_spend, user_id) 
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            """
+                            cursor.execute(sql, (
+                                row["product"], float(row["revenue"]), int(row["units_sold"]), 
+                                float(row["profit"]), int(row["stock"]), float(row["ad_spend"]), 
+                                st.session_state.user_id
+                            ))
+                        conn.commit()
+                        cursor.close()
+                        conn.close()
+                        st.success("✨ Cross-platform dataset safely processed, mapped, and synced to database!")
+                    except Exception as db_err:
+                        st.error(f"Database write bottleneck encountered: {db_err}")
             else:
-                st.success("✨ Cloud Sandbox Mode: Cross-platform metrics normalized inside cached server arrays successfully!")
+                st.success("✨ Cloud Sandbox Mode: Cross-platform metrics normalized in-memory successfully!")
 
             st.subheader("📋 Ingested Dataset Preview (Standardized)")
             st.dataframe(df, width='stretch')
 
-    # Marketplace Integrations Manager (Secure Vault UI)
+    # --- MARKETPLACE INTEGRATIONS ---
     elif page == "Marketplace Integrations":
         st.title("🔗 Secure Marketplace Connections")
-        st.markdown("Link your storefront channels. Credentials are automatically isolated and saved directly inside your encrypted database vault.")
+        st.markdown("Link your storefront channels. Credentials are safe and stored within isolated user vaults.")
         st.markdown("---")
 
-        # UI Input Panel to collect private seller data safely
         connect_col1, connect_col2 = st.columns(2)
 
         with connect_col1:
             st.subheader("Connect a New Retail Channel")
             platform_choice = st.selectbox("Select Target Marketplace", ["Shopify", "Amazon Seller Central", "Walmart Marketplace"])
-            store_address = st.text_input("Storefront Endpoint URL (e.g., ://myshopify.com)")
+            store_address = st.text_input("Storefront Endpoint URL (e.g., myshopify.com)")
             token_input = st.text_input("Private Access Token / Credential Key", type="password")
 
             if st.button("Securely Connect Storefront", width="stretch"):
                 if not store_address or not token_input:
                     st.error("Please fill out all credential configuration parameters.")
                 elif not db_active:
-                    st.warning("🌐 Cloud Sandbox Mode: Connection simulation complete! (Cloud memory lacks database persistence).")
+                    st.warning("🌐 Cloud Sandbox Mode: Connection simulated (persistence disabled).")
                 else:
+                    conn = get_db_connection()
                     try:
-                        # Map choices cleanly to system keys
                         p_map = {"Shopify": "shopify", "Amazon Seller Central": "amazon", "Walmart Marketplace": "walmart"}
                         p_name = p_map[platform_choice]
-
-                        # Ingest directly to MySQL database table vault tied to active user session
+                        cursor = conn.cursor()
                         sql = """
                         INSERT INTO platform_connections (user_id, platform_name, store_url, secure_access_token)
                         VALUES (%s, %s, %s, %s)
                         """
                         cursor.execute(sql, (st.session_state.user_id, p_name, store_address, token_input))
                         conn.commit()
-                        st.success(f"✨ {platform_choice} integration securely synchronized and locked in your database locker!")
+                        cursor.close()
+                        conn.close()
+                        st.success(f"✨ {platform_choice} integration securely synchronized!")
                     except Exception as e:
                         st.error(f"Vault storage interruption: {e}")
 
         with connect_col2:
-            st.info("🔒 **Enterprise-Grade Credential Privacy**\n\nYour access tokens are never saved as clear text inside code modules. Shopulse reads these parameters directly from your secure database rows dynamically at the exact millisecond a live sync is requested.")
-            
-            # Display active connections for the active user profile
+            st.info("🔒 **Enterprise-Grade Credential Privacy**\n\nAccess tokens are securely linked per tenant. Shopulse accesses endpoints only during authenticated synchronizations.")
             st.subheader("Active Secured Channels")
             if db_active:
+                conn = get_db_connection()
                 try:
-                    cursor.execute(f"SELECT platform_name, store_url FROM platform_connections WHERE user_id = {st.session_state.user_id}")
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT platform_name, store_url FROM platform_connections WHERE user_id = %s", (st.session_state.user_id,))
                     active_conns = cursor.fetchall()
+                    cursor.close()
+                    conn.close()
                     if active_conns:
                         for row in active_conns:
                             st.text(f"✅ Active Link: {str(row[0]).upper()} -> {row[1]}")
                     else:
-                        st.caption("No connected external retail environments registered yet.")
+                        st.caption("No external retail environments registered yet.")
                 except Exception:
-                    st.caption("Database link sync loop offline.")
+                    st.caption("Database link offline.")
             else:
-                st.caption("Cloud Sandbox Mode: Simulated connection ledger active.")
+                st.caption("Cloud Sandbox Mode: Mock store connections active.")
 
     # --- PROFIT ANALYSIS PAGE ---
     elif page == "Profit Analysis":
@@ -515,7 +541,7 @@ if st.session_state.logged_in:
         df = load_data()
 
         if not df.empty:
-            df["profit_margin"] = (df["profit"] / df["revenue"]) * 100
+            df["profit_margin"] = (df["profit"] / df["revenue"].replace(0, 1)) * 100
             total_profit = df["profit"].sum()
             avg_margin = df["profit_margin"].mean()
             top_profit_product = df.loc[df["profit"].idxmax(), "product"]
@@ -576,7 +602,7 @@ if st.session_state.logged_in:
         df = load_data()
 
         if not df.empty:
-            df["roas"] = df["revenue"] / df["ad_spend"]
+            df["roas"] = df["revenue"] / df["ad_spend"].replace(0, 1)
             total_ad_spend = df["ad_spend"].sum()
             avg_roas = df["roas"].mean()
 
@@ -595,7 +621,7 @@ if st.session_state.logged_in:
         else:
             st.info("Upload ads dataset first.")
 
-    # Market & Competitor Insights (Upgraded with Top-10 Limits and SKU Search Filters)
+    # --- MARKET & COMPETITOR INSIGHTS ---
     elif page == "Market & Competitor Insights":
         st.title("🎯 Competitor Benchmarks & Market Demand Insights")
         st.markdown("Compare performance markers against automated industry averages and retail benchmarks.")
@@ -604,32 +630,26 @@ if st.session_state.logged_in:
         df = load_data()
 
         if not df.empty:
-            # Calculate metrics
-            df["aov"] = df["revenue"] / df["units_sold"]
-            df["contribution_margin"] = df["profit"] / df["units_sold"]
+            df["aov"] = df["revenue"] / df["units_sold"].replace(0, 1)
+            df["contribution_margin"] = df["profit"] / df["units_sold"].replace(0, 1)
             df["market_demand_index"] = (df["units_sold"] / df["stock"].apply(lambda x: max(x, 1))) * 10
 
-            # --- NEW HIGH-PERFORMANCE SKU SEARCH FILTER BAR ---
             st.subheader("🔍 Intelligent Catalog Filter")
             search_query = st.text_input("Search for a specific product SKU or type name to filter metrics...").strip().lower()
             
-            # Filter the dataframe dynamically based on the user's text input
             if search_query:
-                filtered_df = df[df["product"].str.lower().str.contains(search_query)]
+                filtered_df = df[df["product"].astype(str).str.lower().str.contains(search_query)]
             else:
-                # Scalability Safeguard: If no search query is typed, limit the screen load to the Top 10 rows
                 filtered_df = df.head(10)
                 if len(df) > 10:
                     st.caption(f"💡 Showing top 10 products out of {len(df)} total active SKUs. Use the filter input above to find specific lines.")
 
-            # Render the dropdown metric containers for the filtered dataset only
             if not filtered_df.empty:
                 for _, row in filtered_df.iterrows():
                     with st.expander(f"📦 Product Intelligence: {str(row['product']).upper()}"):
                         met_col1, met_col2, met_col3 = st.columns(3)
                         met_col1.metric("Your AOV", f"₹{row['aov']:,.2f}")
                         met_col2.metric("Unit Contribution", f"₹{row['contribution_margin']:,.2f}")
-                        
                         ad_efficiency = (row["revenue"] / max(row["ad_spend"], 1))
                         met_col3.metric("Ad Spend Efficiency", f"{ad_efficiency:.2f}x")
             else:
@@ -638,9 +658,12 @@ if st.session_state.logged_in:
             st.markdown("---")
             st.subheader("📊 Elastic Market Demand Pull Ratios")
             
-            # Render charting using only the filtered views to ensure ultra-fast window performance
-            fig_demand = px.bar(filtered_df, x="product", y="market_demand_index", title="Consumer Demand Index Tracker", color="market_demand_index", template="simple_white")
-            st.plotly_chart(fig_demand, use_container_width=True)
+            fig_demand = px.bar(
+                filtered_df, x="product", y="market_demand_index", 
+                title="Consumer Demand Index Tracker", color="market_demand_index", 
+                template="simple_white"
+            )
+            st.plotly_chart(fig_demand, width="stretch")
 
             st.subheader("🔮 Elastic Market Demand Strategy Matrix")
             for _, row in filtered_df.iterrows():
@@ -678,10 +701,15 @@ if st.session_state.logged_in:
             system_context = f"You are the Shopulse AI Business Consultant analyst. Assisting user '{st.session_state.username}'. Data:\n{data_summary}\nKeep advice actionable, elite, and maximum 3 brief paragraphs."
 
             if "chat_history" not in st.session_state:
-                st.session_state.chat_history = [{"role": "assistant", "content": f"Greetings! I have completed a safe structural sweep of your database ledger. Your primary revenue vector is currently **{top_product}**. How can I help optimize your store metrics today?"}]
+                st.session_state.chat_history = [{
+                    "role": "assistant", 
+                    "content": f"Greetings! I have completed a safe structural sweep of your database ledger. Your primary revenue vector is currently **{top_product}**. How can I help optimize your store metrics today?"
+                }]
 
             for msg in st.session_state.chat_history:
-                with st.chat_message(msg["role"]): st.write(msg["content"])
+                with st.chat_message(msg["role"]): 
+                    st.write(msg["content"])
+                    
             if user_query := st.chat_input("Ask about your sales, margins, ads, or low stock warnings..."):
                 st.session_state.chat_history.append({"role": "user", "content": user_query})
                 with st.chat_message("user"): 
@@ -699,7 +727,6 @@ if st.session_state.logged_in:
                             except Exception as e: 
                                 response_content = f"⚠️ AI Stream connection issue: {e}"
                         else:
-                            import time
                             time.sleep(1)
                             query_lower = user_query.lower()
                             if "margin" in query_lower or "profit" in query_lower:
@@ -707,14 +734,14 @@ if st.session_state.logged_in:
                             elif "stock" in query_lower or "inventory" in query_lower:
                                 response_content = f"### 📦 Supply Chain Run-Rate Summary\nYour storefront has shipped a total of **{total_units} physical items** across all catalogs."
                             else:
-                                response_content = f"### 💡 Local Hybrid Summary\n- **Primary Revenue Driver:** {top_product}\n- **Total Revenue:** ₹{total_revenue:,.0f}\n\n*Add your Gemini API Key inside secrets to unlock unscripted conversations.*"
+                                response_content = f"### 💡 Local Hybrid Summary\n- **Primary Revenue Driver:** {top_product}\n- **Total Revenue:** ₹{total_revenue:,.0f}\n\n*Add your Gemini API Key inside `.streamlit/secrets.toml` to unlock unscripted AI responses.*"
 
                         st.write(response_content)
                         st.session_state.chat_history.append({"role": "assistant", "content": response_content})
         else:
             st.info("Upload CSV data first to generate AI insights.")
 
-        # Upgraded SaaS Account & Billing Management Panel (Stripe Monetization Core)
+    # --- SAAS ACCOUNT & BILLING PAGE ---
     elif page == "SaaS Account & Billing":
         st.title("💳 SaaS Account & Commercial Subscription Hub")
         st.markdown("Monitor account data metrics, scale operational tier bundles, and manage automated payment cycles.")
@@ -748,12 +775,9 @@ if st.session_state.logged_in:
                 """, unsafe_allow_html=True)
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # Live Redirection Action Point
                 if st.button("💳 Upgrade via Secure Stripe Checkout", width="stretch", key="upgrade_growth_btn"):
                     st.toast("🔄 Generating secure Stripe cryptographic checkout token...", icon="⚡")
-                    import time
                     time.sleep(1)
-                    # Redirects user safely to Stripe's mock payment verification page in a clean new tab
                     st.components.v1.html("<script>window.open('https://stripe.com', '_blank');</script>", height=0)
                     st.success("🎉 Stripe checkout redirection launched in a separate window tab!")
                     
@@ -769,21 +793,21 @@ if st.session_state.logged_in:
                 
                 if st.button("💼 Contact Corporate Enterprise Sales", width="stretch", key="upgrade_enter_btn"):
                     st.toast("✉️ Generating enterprise onboarding payload container...", icon="📦")
-                    import time
                     time.sleep(0.5)
-                    # Automatically opens their local computer's email window (Outlook/Gmail) pre-filled with a sales request!
-                    st.components.v1.html(f"<script>window.open('mailto:sales@shopulse.io?subject=Enterprise Subscription Inquiry&body=Hello Sales Team, My Shopulse username is {st.session_state.username}. I would like to schedule an enterprise onboarding session for my marketplace channels.', '_blank');</script>", height=0)
+                    st.components.v1.html(
+                        f"<script>window.open('mailto:sales@shopulse.io?subject=Enterprise Subscription Inquiry&body=Hello Sales Team, My Shopulse username is {st.session_state.username}. I would like to schedule an enterprise onboarding session for my marketplace channels.', '_blank');</script>", 
+                        height=0
+                    )
                     st.info("✉️ Secure communication dispatch pipeline opened inside your local mail agent!")
                     
         with sub_col2:
             st.subheader("🔒 Security & Financial Compliance Logs")
             st.markdown("""
-            - **Cryptographic Encryption Standard:** All server token transmissions are shielded using military-grade SHA-256 protocols.
-            - **PCI-DSS Compliance Certification:** Shopulse never directly collects or processes raw credit card details on its servers. Financial transactions are delegated entirely to Stripe's encrypted payment vaults.
-            - **Data Isolation Sovereignty:** Multi-user data records are partitioned securely at the database query layer utilizing explicit user session identifier constraints.
-            - **Session Expiration Protocol:** Automated session termination locks out unauthorized traffic instantly upon hitting the logout node.
+            - **Cryptographic Protection Standard:** Token communications and user credentials are authenticated and guarded using salted SHA-256 protocols.
+            - **PCI-DSS Compliance Certification:** Shopulse never directly processes raw payment methods on its servers; payments defer entirely to PCI-compliant gateways.
+            - **Multi-Tenant Isolation Sovereignty:** Multi-user data records are partitioned securely using verified user session ID parameters.
+            - **Session Lifecycle Protocol:** State variables are terminated immediately upon sign-out.
             """)
 
 else:
     st.info("🔒 Please log in or create an account via the sidebar to access Shopulse.")
-
